@@ -1,0 +1,87 @@
+# R Studio Server for Ubuntu Linux - 版本记录
+# 参考Seurat官方教程 - 2024-3-18
+# 数据集：PBMC3K
+
+
+# 一、读入数据
+## 安装和加载所需包
+setwd("~/Project/R_workspace")
+BiocManager::install("Seurat") # 错误：安装curl库时缺少的依赖项 libcurl 库（用于与网络进行通信）：sudo apt-get install libcurl4-openssl-dev
+BiocManager::install("dplyr")
+BiocManager::install("patchwork")
+library(dplyr)
+library(Seurat)
+library(patchwork) 
+
+## 解压缩数据集 tar -zxvf file.tar.gz path
+## 创建Seurat对象
+pbmc.data <- Read10X(data.dir = "filtered_gene_bc_matrices/hg19/") 
+pbmc <- CreateSeuratObject(counts = pbmc.data, project = "pbmc3k", min.cells = 3, min.features = 200) 
+
+# 二、数据预处理
+# 1、QC
+pbmc[["percent.mt"]] <- PercentageFeatureSet(pbmc, pattern = "^MT-") # 新增一列percent.mt数据
+plot1 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2 # 合并
+
+## 过滤
+pbmc <- subset(pbmc, subset = nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mt < 5) # 选取2500>nFeature_RNA>200和percent.mt<5
+
+# 2、数据缩放
+pbmc <- NormalizeData(pbmc, normalization.method = "LogNormalize", scale.factor = 10000) # 为默认参数，缩放的数值存储在pbmc[["RNA"]]@data中
+
+# 3、鉴定高变基因
+pbmc <- FindVariableFeatures(pbmc, selection.method = "vst", nfeatures = 2000)
+plot1 <- VariableFeaturePlot(pbmc)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+plot1 + plot2 #这里需要拉大窗口才能显示
+
+# 4、数据标准化
+all.genes <- rownames(pbmc)
+pbmc <- ScaleData(pbmc, features = all.genes)
+
+# 5、PCA可视化
+pbmc <- RunPCA(pbmc, features = VariableFeatures(object = pbmc))
+VizDimLoadings(pbmc, dims = 1:2, reduction = "pca")
+DimPlot(pbmc, reduction = "pca")
+DimHeatmap(pbmc, dims = 1, cells = 500, balanced = TRUE) 
+
+# 6、确认包含信息量最大的维度（features）
+## JackStraw
+pbmc <- JackStraw(pbmc, num.replicate = 100)
+pbmc <- ScoreJackStraw(pbmc, dims = 1:20)
+JackStrawPlot(pbmc, dims = 1:15)
+
+## Elbow plot
+ElbowPlot(pbmc)
+
+# 三、聚类与降维
+# 1、KNN聚类
+pbmc <- FindNeighbors(pbmc, dims = 1:10)
+pbmc <- FindClusters(pbmc, resolution = 0.5)
+
+# 2、非线性降维（UMAP/tSNE）
+pbmc <- RunUMAP(pbmc, dims = 1:10)
+DimPlot(pbmc, reduction = "umap", label = TRUE) # umap or tsne
+saveRDS(pbmc, file = "Output/pbmc_tutorial.rds") # 保存rds，用于后续分析
+
+# 四、细胞注释
+# 1、Find cluster biomarkers
+## cluster1.markers <- FindMarkers(pbmc, ident.1 = 1, min.pct = 0.25)找cluster1的markers
+pbmc.markers <- FindAllMarkers(pbmc, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25) 
+
+# 2、可视化
+VlnPlot(pbmc, features = c("MS4A1", "CD79A")) # 可视化其中两个基因在不同细胞簇里的表达情况
+FeaturePlot(pbmc, features = c("MS4A1", "GNLY", "CD3E", "CD14", "FCER1A", "FCGR3A", "LYZ", "PPBP", "CD8A")) # 特征图
+
+top10 <- pbmc.markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+DoHeatmap(pbmc, features = top10$gene) + NoLegend() # 每个聚类前10个差异基因表达热图，如果小于10，则绘制所有biomarkers
+
+# 3、鉴定细胞类型
+new.cluster.ids <- c("Naive CD4 T", "CD14+ Mono", "Memory CD4 T", "B", "CD8 T", "FCGR3A+ Mono", "NK", "DC", "Platelet")
+names(new.cluster.ids) <- levels(pbmc)
+pbmc <- RenameIdents(pbmc, new.cluster.ids)
+DimPlot(pbmc, reduction = "umap", label = TRUE, pt.size = 0.5) + NoLegend()
+
+saveRDS(pbmc, file = "Output/pbmc3k_final.rds")
