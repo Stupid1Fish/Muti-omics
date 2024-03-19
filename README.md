@@ -1,7 +1,6 @@
 # Muti-omics
 Multi-omics data analysis workflow deploying
-部署多组学数据分析的基本流程
-****
+
 ## 一、组学类型
 转录组
 单细胞转录组
